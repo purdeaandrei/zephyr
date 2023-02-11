@@ -59,6 +59,7 @@ struct udc_rpi_state {
 	bool should_set_address;
 	uint16_t control_out_ep_rcvd;
 	uint8_t addr;
+	bool remote_wakeup_pending;
 };
 
 static struct udc_rpi_state state;
@@ -246,11 +247,47 @@ static void udc_rpi_handle_buff_status(void)
 	}
 }
 
+static void udc_rpi_handle_resume(void)
+{
+	struct cb_msg msg;
+
+	LOG_DBG("Resume");
+	msg.ep = 0U;
+	msg.type = USB_DC_RESUME;
+	msg.ep_event = false;
+
+	k_msgq_put(&usb_dc_msgq, &msg, K_NO_WAIT);
+	state.remote_wakeup_pending = false;
+}
+
+static void udc_rpi_handle_suspended(void)
+{
+	struct cb_msg msg;
+
+	LOG_DBG("Suspended");
+	msg.ep = 0U;
+	msg.type = USB_DC_SUSPEND;
+	msg.ep_event = false;
+
+	k_msgq_put(&usb_dc_msgq, &msg, K_NO_WAIT);
+}
+
 static void udc_rpi_isr(const void *arg)
 {
 	uint32_t status = usb_hw->ints;
 	uint32_t handled = 0;
 	struct cb_msg msg;
+
+	if ((status & (USB_INTS_BUFF_STATUS_BITS | USB_INTS_SETUP_REQ_BITS)) &&
+	    state.remote_wakeup_pending) {
+		/* The rpi pico USB device does not appear to be sending
+		 * USB_INTR_DEV_RESUME_FROM_HOST interrupts when the resume is
+		 * a result of a remote wakeup request sent by us.
+		 * This will simulate a resume event if bus activity is observed
+		 */
+
+		udc_rpi_handle_resume();
+	}
 
 	if (status & USB_INTS_BUFF_STATUS_BITS) {
 		/* Note: we should check buffer interrupts before setup interrupts.
@@ -305,6 +342,18 @@ static void udc_rpi_isr(const void *arg)
 		msg.ep_event = false;
 
 		k_msgq_put(&usb_dc_msgq, &msg, K_NO_WAIT);
+	}
+
+	if (status & USB_INTS_DEV_SUSPEND_BITS) {
+		handled |= USB_INTS_DEV_SUSPEND_BITS;
+		hw_clear_alias(usb_hw)->sie_status = USB_SIE_STATUS_SUSPENDED_BITS;
+		udc_rpi_handle_suspended();
+	}
+
+	if (status & USB_INTR_DEV_RESUME_FROM_HOST_BITS) {
+		handled |= USB_INTR_DEV_RESUME_FROM_HOST_BITS;
+		hw_clear_alias(usb_hw)->sie_status = USB_SIE_STATUS_RESUME_BITS;
+		udc_rpi_handle_resume();
 	}
 
 	if (status & USB_INTS_ERROR_DATA_SEQ_BITS) {
@@ -392,7 +441,8 @@ static int udc_rpi_init(void)
 		       USB_INTS_SETUP_REQ_BITS | /*USB_INTS_EP_STALL_NAK_BITS |*/
 		       USB_INTS_ERROR_BIT_STUFF_BITS | USB_INTS_ERROR_CRC_BITS |
 		       USB_INTS_ERROR_DATA_SEQ_BITS | USB_INTS_ERROR_RX_OVERFLOW_BITS |
-		       USB_INTS_ERROR_RX_TIMEOUT_BITS;
+		       USB_INTS_ERROR_RX_TIMEOUT_BITS | USB_INTS_DEV_SUSPEND_BITS |
+		       USB_INTR_DEV_RESUME_FROM_HOST_BITS;
 
 	/* Set up endpoints (endpoint control registers)
 	 * described by device configuration
@@ -892,6 +942,14 @@ int usb_dc_reset(void)
 {
 	LOG_ERR("Not implemented");
 
+	return 0;
+}
+
+int usb_dc_wakeup_request(void)
+{
+	LOG_DBG("Remote Wakeup");
+	state.remote_wakeup_pending = true;
+	hw_set_alias(usb_hw)->sie_ctrl = USB_SIE_CTRL_RESUME_BITS;
 	return 0;
 }
 
