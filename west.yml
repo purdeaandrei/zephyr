@@ -23,6 +23,8 @@ manifest:
       url-base: https://github.com/zephyrproject-rtos
     - name: zmkfirmware
       url-base: https://github.com/zmkfirmware
+    - name: purdeaandrei
+      url-base: https://github.com/purdeaandrei
 
   #
   # Please add items below based on alphabetical order
@@ -117,7 +119,8 @@ manifest:
         - hal
     - name: hal_rpi_pico
       path: modules/hal/rpi_pico
-      revision: a094c060e0c2d43c7f9d8f5c06cc0665117e0c18
+      remote: purdeaandrei
+      revision: hack_to_make_upgraded_hal_compile
       groups:
         - hal
     - name: hal_silabs
